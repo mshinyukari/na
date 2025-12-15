@@ -13,6 +13,20 @@ const CLEAR_THRESHOLDS = {
   'FULL': 365
 };
 
+// Rank Definitions based on user request
+const RANK_DEFINITIONS = [
+    { limit: 10, label: "１年に数回生放送をするVtuber" },
+    { limit: 50, label: "口から生まれたと勘違いされるおじさん" },
+    { limit: 100, label: "いつも口が空いているドット絵" },
+    { limit: 150, label: "AIに牛丼の話ばかりされるテグー" },
+    { limit: 200, label: "こんちゃーすと挨拶するクマ" },
+    { limit: 250, label: "いつもチューブに挨拶する蜂" },
+    { limit: 300, label: "落ちてきた四角をそろえて消すやつ" },
+    { limit: 350, label: "海が全てあなたの発した「な」" }, // Default fallback before clear
+];
+
+const CLEAR_MESSAGE = "あなたの『な』が空から降り注ぎ地球が爆発しました";
+
 const NA_ANIMATIONS = Array.from({ length: 50 }, (_, i) => `anim-na-${i + 1}`);
 const CUTIN_ANIMATIONS = [
     'cutin-impact',
@@ -109,6 +123,7 @@ const Game: React.FC = () => {
   // Animation State
   const [isHitAnimating, setIsHitAnimating] = useState(false);
   const [cutInState, setCutInState] = useState<{ active: boolean, type: string }>({ active: false, type: '' });
+  const [rankNotification, setRankNotification] = useState<{text: string, id: number} | null>(null);
 
   // Settings State
   const [volume, setVolume] = useState(0.5);
@@ -145,7 +160,8 @@ const Game: React.FC = () => {
   const lastAudioVolume = useRef(0);
   const isArmedRef = useRef(true); // For "Valley" detection
   const currentNotePeakRef = useRef(0); // Track peak of current sound to determine drop-off
-  
+  const lastRankIndexRef = useRef<number>(0);
+
   // Rhythm Refs
   const lastBeatTimeRef = useRef<number>(0);
   const startTimeRef = useRef<number>(0); // To calculate elapsed time for inflation
@@ -417,8 +433,8 @@ const Game: React.FC = () => {
     setScore(prev => {
         const newScore = prev + 1;
         
-        // CUT-IN CHECK (Every 30 hits)
-        if (newScore > 0 && newScore % 30 === 0) {
+        // CUT-IN CHECK (Changed from 30 to 32)
+        if (newScore > 0 && newScore % 32 === 0) {
             const randomCutIn = CUTIN_ANIMATIONS[Math.floor(Math.random() * CUTIN_ANIMATIONS.length)];
             setCutInState({ active: true, type: randomCutIn });
             
@@ -428,6 +444,33 @@ const Game: React.FC = () => {
             }, 1000);
         }
         
+        // RANK NOTIFICATION CHECK
+        // Find current rank index based on new score
+        let currentRankIndex = -1;
+        for (let i = 0; i < RANK_DEFINITIONS.length; i++) {
+            if (newScore <= RANK_DEFINITIONS[i].limit) {
+                currentRankIndex = i;
+                break;
+            }
+        }
+        if (currentRankIndex === -1) currentRankIndex = RANK_DEFINITIONS.length - 1;
+
+        // If index changed and it's higher than what we last announced
+        if (currentRankIndex > lastRankIndexRef.current) {
+            lastRankIndexRef.current = currentRankIndex;
+            const rankLabel = RANK_DEFINITIONS[currentRankIndex].label;
+            
+            setRankNotification({
+                text: `${rankLabel}くらい増えています！`,
+                id: Date.now()
+            });
+
+            // Clear notification after 4s
+            setTimeout(() => {
+                setRankNotification(prev => (prev && prev.id < Date.now() - 3500) ? null : prev);
+            }, 4000);
+        }
+
         return newScore;
     });
 
@@ -566,7 +609,9 @@ const Game: React.FC = () => {
     lastBeatTimeRef.current = 0;
     startTimeRef.current = 0;
     pauseStartTimeRef.current = 0;
+    lastRankIndexRef.current = 0;
     setCutInState({ active: false, type: '' });
+    setRankNotification(null);
     
     if (gameTimer.current) clearInterval(gameTimer.current);
     
@@ -849,10 +894,17 @@ const Game: React.FC = () => {
       setGameState('PLAYING');
   };
 
+  // Helper to find rank label
+  const getCurrentRankLabel = (currentScore: number) => {
+      const rank = RANK_DEFINITIONS.find(r => currentScore <= r.limit);
+      return rank ? rank.label : RANK_DEFINITIONS[RANK_DEFINITIONS.length - 1].label;
+  };
+
   const renderContent = () => {
     const threshold = CLEAR_THRESHOLDS[gameMode];
     // Avoid divide by zero if threshold is 0 (shouldn't happen)
     const isCleared = score >= threshold;
+    const currentRankLabel = getCurrentRankLabel(score);
 
     // --- HUD Components to share between PLAYING and PAUSED ---
     const HUD = (
@@ -874,8 +926,8 @@ const Game: React.FC = () => {
                 </div>
 
                  {/* Quota Bar (Right) */}
-                <div className="flex-1 max-w-sm">
-                    <div className={`bg-white/90 backdrop-blur rounded-full p-2 border-4 shadow-md flex items-center gap-3 ${isCleared ? 'border-yellow-400 animate-pulse ring-4 ring-yellow-200' : 'border-cyan-400'}`}>
+                <div className="flex-1 max-w-sm flex flex-col items-end">
+                    <div className={`w-full bg-white/90 backdrop-blur rounded-full p-2 border-4 shadow-md flex items-center gap-3 ${isCleared ? 'border-yellow-400 animate-pulse ring-4 ring-yellow-200' : 'border-cyan-400'}`}>
                         <div className={`${isCleared ? 'text-yellow-500' : 'text-cyan-500'} font-black text-lg px-2`}>
                             {isCleared ? 'クリア！' : 'ノルマ'}
                         </div>
@@ -888,6 +940,12 @@ const Game: React.FC = () => {
                         <div className="text-2xl font-black text-slate-700 w-24 text-right">
                             {score}<span className="text-sm text-gray-400">/{threshold}</span>
                         </div>
+                    </div>
+                    {/* Rank Label Under Bar */}
+                    <div className="mt-1 mr-4 bg-white/80 px-3 py-1 rounded-full border border-cyan-100 shadow-sm">
+                         <span className="text-[10px] md:text-xs font-bold text-slate-500 block truncate max-w-[200px] text-right">
+                             {isCleared ? 'あなたの『な』が空を埋め尽くしています' : `${currentRankLabel}くらい`}
+                         </span>
                     </div>
                 </div>
             </div>
@@ -923,6 +981,19 @@ const Game: React.FC = () => {
             <span className="text-[10px] text-slate-400 font-bold bg-white/30 backdrop-blur px-2 py-1 rounded-full">BGM(名を冠する為に)</span>
         </div>
     );
+    
+    // Rank Notification Toast
+    const RankToast = rankNotification ? (
+        <div 
+            key={rankNotification.id} 
+            className="fixed bottom-24 left-1/2 transform -translate-x-1/2 z-50 pointer-events-none animate-[fade-up_0.5s_ease-out_forwards]"
+        >
+            <div className="bg-black/70 backdrop-blur-md text-white px-6 py-2 rounded-full border border-white/20 shadow-xl flex items-center gap-2">
+                <span className="text-yellow-400 text-lg">✨</span>
+                <span className="text-xs md:text-sm font-bold">{rankNotification.text}</span>
+            </div>
+        </div>
+    ) : null;
 
     if (gameState === 'PAUSED') {
         return (
@@ -1044,7 +1115,7 @@ const Game: React.FC = () => {
                                         : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
                                     }`}
                                 >
-                                    {mode === 'FULL' ? 'フル (73秒)' : mode === '10s' ? '10秒' : '30秒'}
+                                    {mode === 'FULL' ? 'フル (72秒)' : mode === '10s' ? '10秒' : '30秒'}
                                 </button>
                             ))}
                          </div>
@@ -1052,18 +1123,18 @@ const Game: React.FC = () => {
 
                      <button 
                         onClick={handleStart} 
-                        className="group relative flex-1 w-full focus:outline-none transform transition-all hover:scale-[1.02] active:scale-95 duration-200 min-h-[100px] md:min-h-[120px]"
+                        className="group relative flex-1 w-full focus:outline-none transform transition-all hover:scale-[1.02] active:scale-95 duration-200 min-h-[120px] md:min-h-[140px]"
                     >
                         <div className="absolute inset-0 bg-pink-300 rounded-[2rem] transform translate-y-2"></div>
-                        <div className="absolute inset-0 bg-gradient-to-b from-pink-400 to-pink-500 rounded-[2rem] border-4 border-white shadow-inner flex flex-col items-center justify-center overflow-hidden">
+                        <div className="absolute inset-0 bg-gradient-to-b from-pink-400 to-pink-500 rounded-[2rem] border-4 border-white shadow-inner flex flex-col items-center justify-center overflow-hidden p-2">
                             {/* Star decoration */}
                             <div className="absolute top-[-20%] left-[-10%] w-32 h-32 bg-white/20 rotate-45 transform"></div>
                             <div className="absolute bottom-[-20%] right-[-10%] w-32 h-32 bg-white/20 rotate-12 transform"></div>
                             
-                            <span className="text-4xl md:text-5xl font-black text-white drop-shadow-md z-10">始める！</span>
-                            <div className="bg-white/30 rounded-full px-6 py-2 mt-4 md:mt-6 z-10">
-                                <span className="text-lg md:text-2xl font-bold text-white">
-                                    {gameMode === 'FULL' ? '73秒名を伝える' : gameMode === '10s' ? '10秒名を伝える' : '30秒名を伝える'}
+                            <span className="text-3xl md:text-5xl font-black text-white drop-shadow-md z-10 leading-none mb-1">始める！</span>
+                            <div className="bg-white/30 rounded-full px-4 py-1 mt-1 z-10 max-w-[90%] truncate">
+                                <span className="text-xs md:text-base font-bold text-white block truncate">
+                                    {gameMode === 'FULL' ? '72秒名を伝える' : gameMode === '10s' ? '10秒名を伝える' : '30秒名を伝える'}
                                 </span>
                             </div>
                         </div>
@@ -1167,6 +1238,25 @@ const Game: React.FC = () => {
             
             {error && <div className="mt-4 bg-red-400 text-white font-bold p-3 rounded-xl border-4 border-white animate-bounce shadow-lg max-w-lg text-center text-sm break-all">{error}</div>}
             
+            <div className="mt-8 flex flex-col items-center gap-2 z-20">
+                <div className="bg-white/90 backdrop-blur-sm px-6 py-3 rounded-full border-4 border-pink-200 shadow-lg flex flex-col md:flex-row items-center gap-3 transition-transform hover:scale-105">
+                    <span className="font-bold text-slate-600 flex items-center gap-2">
+                        <span>🎨</span> 制作者: しあしあ
+                    </span>
+                    <a 
+                        href="https://www.youtube.com/@shiashia-ch" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="bg-red-600 text-white text-sm font-bold px-4 py-2 rounded-full hover:bg-red-700 transition-colors flex items-center gap-2 shadow-sm"
+                    >
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                        </svg>
+                        チャンネル登録お願いします
+                    </a>
+                </div>
+            </div>
+
             </div>
           </div>
         );
@@ -1199,21 +1289,21 @@ const Game: React.FC = () => {
             {BeatIndicator}
             {BGMCredit}
             <CutInDisplay active={cutInState.active} type={cutInState.type} />
+            {RankToast}
           </>
         );
       case 'FINISHED':
         const { message: rankMessage, usePrefix } = (() => {
-            if (isCleared) return { message: "あなたの『な』が空から降り注ぎ地球が爆発しました", usePrefix: false };
-            if (score <= 10) return { message: "１年に数回生放送をするVtuberくらい増加しました", usePrefix: true };
-            if (score <= 50) return { message: "口から生まれたと勘違いされるおじさんくらい増加しました", usePrefix: true };
-            if (score <= 100) return { message: "いつも口が空いているドット絵くらい増加しました", usePrefix: true };
-            if (score <= 150) return { message: "AIに牛丼の話ばかりされるテグーくらい増加しました", usePrefix: true };
-            if (score <= 200) return { message: "こんちゃーすと挨拶するクマくらい増加しました", usePrefix: true };
-            if (score <= 250) return { message: "いつもチューブに挨拶する蜂くらい増加しました", usePrefix: true };
-            if (score <= 300) return { message: "落ちてきた四角をそろえて消すやつくらい増加しました", usePrefix: true };
+            if (isCleared) return { message: CLEAR_MESSAGE, usePrefix: false };
             
-            // Default for > 300 (or <= 350 catch all not cleared)
-            return { message: "海が全てあなたの発した「な」になりました", usePrefix: false };
+            // Use the consistent RANK_DEFINITIONS
+            const rank = RANK_DEFINITIONS.find(r => score <= r.limit);
+            if (rank) {
+                return { message: `${rank.label}くらい増加しました`, usePrefix: true };
+            }
+            
+            // Fallback for huge scores
+            return { message: `${RANK_DEFINITIONS[RANK_DEFINITIONS.length - 1].label}になりました`, usePrefix: false };
         })();
 
         return (
@@ -1289,10 +1379,10 @@ const Game: React.FC = () => {
   return (
     <div className="w-full h-screen flex items-center justify-center relative overflow-hidden bg-polka font-sans selection:bg-pink-200 selection:text-pink-900">
         <audio ref={bgmRef} id="bgm" loop preload="auto">
-          <source src="https://raw.githubusercontent.com/mshinyukari/-/main/bgm/bgm.mp3" type="audio/mpeg" />
+          <source src="https://raw.githubusercontent.com/mshinyukari/na/main/bgm/bgm.mp3" type="audio/mpeg" />
         </audio>
         <audio ref={menuBgmRef} id="menu-bgm" loop preload="auto">
-          <source src="https://raw.githubusercontent.com/mshinyukari/-/main/bgm/top.mp3" type="audio/mpeg" />
+          <source src="https://raw.githubusercontent.com/mshinyukari/na/main/bgm/top.mp3" type="audio/mpeg" />
         </audio>
         <Crowd progress={Math.min(score / CLEAR_THRESHOLDS[gameMode], 1)} />
         {fallingNas.map(na => <FallingNaComponent key={na.id} na={na} />)}
